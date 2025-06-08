@@ -1,0 +1,18 @@
+[package]
+name = "ci_monitor_daemon"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tokio = { version = "1", features = ["full"] } # Async runtime, networking, file I/O, signals
+serde = { version = "1.0", features = ["derive"] } # For serializing/deserializing data (JSON)
+serde_json = "1.0" # JSON implementation for Serde
+reqwest = { version = "0.12", features = ["json"] } # HTTP client, like Python's 'requests'
+log = "0.4" # Logging facade
+env_logger = "0.11" # A simple logger implementation
+anyhow = "1.0" # For flexible error handling
+uuid = { version = "1.8", features = ["v4", "serde"] } # For generating unique task IDs
+dashmap = "5.5" # A concurrent HashMap, for thread-safe access to tasks
+scopeguard = "1.2.0" # For running cleanup code when a scope is exited
