@@ -1,8 +1,24 @@
+# What's this?
+
+A vibe-coded contraption so CLI-based coding agents get notified when the CI pipeline of the MR
+they're working on finishes. This has been tested with Claude Code, but it hope it works with
+[AmpCode](https://ampcode.com) too
+
+The tool checks whether the agent session has changed since the ci-watch command was issued. It
+literally reads the contents of the terminal. If the session has not changed, the agent is prompted
+automatically.  
+
+If the session has changed, the user gets a notification with a button to focus the agent terminal.
+This is all hard-coded to work on MacOs with the Kitty terminal (my setup). Although you can
+probably just replace Kitty with your terminal app for this to work.
+
 # Installation
 
 You'll need ci_watch.py in your path. I create a symlink from `~/.local/bin/ci-watch`.
 
 Build the daemon with `cargo build --release`
+
+You'll also need to have [alerter](https://github.com/vjeantet/alerter) in your path.
 
 # Usage
 
