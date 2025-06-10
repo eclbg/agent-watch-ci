@@ -13,7 +13,6 @@ use tokio::process::Command;
 use tokio::signal;
 use tokio::sync::broadcast;
 use tokio::time::timeout;
-use uuid::Uuid;
 
 // --- Constants ---
 const SOCKET_PATH: &str = "/tmp/ci_monitor.sock";
@@ -23,17 +22,22 @@ const POLLING_TIMEOUT_SECS: u64 = 3600;
 
 // --- Global State ---
 
-// A thread-safe hash map to store active polling tasks.
-struct ActiveTask {
+// Key for tracking unique pipelines
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct PipelineKey {
     project_id: String,
     merge_request_id: String,
+}
+
+// A thread-safe hash map to store active polling tasks.
+struct ActiveTask {
     // The handle to the spawned tokio task. We can call `.abort()` on this to stop it.
     task_handle: tokio::task::JoinHandle<()>,
 }
 
 // Using `LazyLock` for the most ergonomic, built-in lazy initialization.
 // This provides the same ease-of-use as the old `lazy_static!` macro.
-static ACTIVE_TASKS: LazyLock<DashMap<Uuid, Arc<ActiveTask>>> = LazyLock::new(DashMap::new);
+static ACTIVE_TASKS: LazyLock<DashMap<PipelineKey, Arc<ActiveTask>>> = LazyLock::new(DashMap::new);
 static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
 static GITLAB_API_URL: LazyLock<String> = LazyLock::new(|| {
     env::var("GITLAB_API_URL").unwrap_or_else(|_| "https://gitlab.com/api/v4".to_string())
@@ -68,7 +72,7 @@ struct Response {
     status: String,
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    task_id: Option<Uuid>,
+    task_id: Option<String>,
 }
 
 // --- Main Execution & Daemon Lifecycle ---
@@ -187,15 +191,26 @@ async fn handle_register_ci(payload: RegisterRequest) -> Response {
         payload.merge_request_id, payload.project_id
     );
 
-    let task_id = Uuid::new_v4();
+    let pipeline_key = PipelineKey {
+        project_id: payload.project_id.clone(),
+        merge_request_id: payload.merge_request_id.clone(),
+    };
+
+    // Cancel existing task for this pipeline if it exists
+    if let Some((_, existing_task)) = ACTIVE_TASKS.remove(&pipeline_key) {
+        existing_task.task_handle.abort();
+        info!("Cancelled existing task for MR {} in project {}", payload.merge_request_id, payload.project_id);
+    }
+
     let project_id_clone = payload.project_id.clone();
     let mr_id_clone = payload.merge_request_id.clone();
     let tmux_pane_id_clone = payload.tmux_pane_id.clone();
+    let pipeline_key_clone = pipeline_key.clone();
 
     // Spawn the polling task immediately. It will handle its own internal delay.
     let task_handle = tokio::spawn(async move {
         poll_ci_status(
-            task_id,
+            pipeline_key_clone,
             project_id_clone,
             mr_id_clone,
             tmux_pane_id_clone,
@@ -204,19 +219,18 @@ async fn handle_register_ci(payload: RegisterRequest) -> Response {
     });
 
     let task = Arc::new(ActiveTask {
-        project_id: payload.project_id,
-        merge_request_id: payload.merge_request_id,
         task_handle,
     });
 
-    ACTIVE_TASKS.insert(task_id, task);
+    ACTIVE_TASKS.insert(pipeline_key.clone(), task);
 
-    info!("Registered and started polling task {}", task_id);
+    let task_id_str = format!("{}-{}", payload.project_id, payload.merge_request_id);
+    info!("Registered and started polling task {}", task_id_str);
     // Respond to the client immediately.
     Response {
         status: "success".to_string(),
         message: "CI monitoring task registered.".to_string(),
-        task_id: Some(task_id),
+        task_id: Some(task_id_str),
     }
 }
 
@@ -226,47 +240,39 @@ async fn handle_cancel_ci(payload: CancelRequest) -> Response {
         payload.merge_request_id, payload.project_id
     );
 
-    let tasks_to_cancel: Vec<Uuid> = ACTIVE_TASKS
-        .iter()
-        .filter(|entry| {
-            entry.value().project_id == payload.project_id
-                && entry.value().merge_request_id == payload.merge_request_id
-        })
-        .map(|entry| *entry.key())
-        .collect();
+    let pipeline_key = PipelineKey {
+        project_id: payload.project_id.clone(),
+        merge_request_id: payload.merge_request_id.clone(),
+    };
 
-    if tasks_to_cancel.is_empty() {
+    if let Some((_, task)) = ACTIVE_TASKS.remove(&pipeline_key) {
+        task.task_handle.abort();
+        let task_id_str = format!("{}-{}", payload.project_id, payload.merge_request_id);
+        info!("Cancelled task {}", task_id_str);
+        Response {
+            status: "success".to_string(),
+            message: "Cancelled matching task.".to_string(),
+            task_id: None,
+        }
+    } else {
         let msg = format!(
             "No active polling task found for MR {} and Project {}",
             payload.merge_request_id, payload.project_id
         );
         warn!("{}", msg);
-        return Response { status: "error".to_string(), message: msg, task_id: None };
-    }
-
-    for task_id in &tasks_to_cancel {
-        if let Some((_, task)) = ACTIVE_TASKS.remove(task_id) {
-            task.task_handle.abort();
-            info!("Cancelled task {}", task_id);
-        }
-    }
-
-    Response {
-        status: "success".to_string(),
-        message: format!("Cancelled {} matching task(s).", tasks_to_cancel.len()),
-        task_id: None,
+        Response { status: "error".to_string(), message: msg, task_id: None }
     }
 }
 
 // --- CI Polling Logic ---
 
 async fn poll_ci_status(
-    task_id: Uuid,
+    pipeline_key: PipelineKey,
     project_id: String,
     merge_request_iid: String,
     tmux_pane_id: String,
 ) {
-    let task_name = format!("Task-{}", &task_id.to_string()[..8]);
+    let task_name = format!("Task-{}-{}", project_id, merge_request_iid);
 
     // Wait 15 seconds before doing anything else.
     info!("{}: Waiting 15 seconds before initial pane capture.", task_name);
@@ -280,7 +286,7 @@ async fn poll_ci_status(
                 "{}: Could not capture initial pane content for {}. Aborting task. Error: {}",
                 task_name, tmux_pane_id, e
             );
-            ACTIVE_TASKS.remove(&task_id);
+            ACTIVE_TASKS.remove(&pipeline_key);
             return;
         }
     };
@@ -323,7 +329,7 @@ async fn poll_ci_status(
         Ok(content) => content,
         Err(e) => {
             error!("{}: Could not capture final pane content for {}. Skipping notification. Error: {}", task_name, tmux_pane_id, e);
-            ACTIVE_TASKS.remove(&task_id);
+            ACTIVE_TASKS.remove(&pipeline_key);
             return;
         }
     };
@@ -340,7 +346,7 @@ async fn poll_ci_status(
         }
     }
 
-    ACTIVE_TASKS.remove(&task_id);
+    ACTIVE_TASKS.remove(&pipeline_key);
     info!("{}: Cleaned up completed task.", task_name);
 }
 
