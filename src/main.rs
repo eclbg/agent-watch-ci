@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use clap::{Parser, ValueEnum};
 use dashmap::DashMap;
 use log::{error, info, warn};
 use reqwest::Client;
@@ -20,6 +21,27 @@ const PID_FILE_PATH: &str = "/tmp/ci_monitor.pid";
 const POLLING_INTERVAL_SECS: u64 = 60;
 const POLLING_TIMEOUT_SECS: u64 = 3600;
 
+// --- CLI Arguments ---
+
+#[derive(Parser, Debug)]
+#[command(name = "ci_monitor_daemon")]
+#[command(about = "A daemon for monitoring GitLab CI/CD pipelines")]
+struct Args {
+    /// Notification behavior
+    #[arg(long, value_enum, default_value_t = NotifyMode::Always)]
+    notify: NotifyMode,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum NotifyMode {
+    /// Never send notifications
+    Never,
+    /// Only notify when pane contents have changed
+    PaneContentsChanged,
+    /// Always send notifications
+    Always,
+}
+
 // --- Global State ---
 
 // Key for tracking unique pipelines
@@ -38,6 +60,7 @@ struct ActiveTask {
 // Using `LazyLock` for the most ergonomic, built-in lazy initialization.
 // This provides the same ease-of-use as the old `lazy_static!` macro.
 static ACTIVE_TASKS: LazyLock<DashMap<PipelineKey, Arc<ActiveTask>>> = LazyLock::new(DashMap::new);
+static NOTIFY_MODE: LazyLock<std::sync::Mutex<NotifyMode>> = LazyLock::new(|| std::sync::Mutex::new(NotifyMode::Always));
 static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
 static GITLAB_API_URL: LazyLock<String> = LazyLock::new(|| {
     env::var("GITLAB_API_URL").unwrap_or_else(|_| "https://gitlab.com/api/v4".to_string())
@@ -79,6 +102,14 @@ struct Response {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Args::parse();
+    
+    // Set the global notification mode
+    {
+        let mut notify_mode = NOTIFY_MODE.lock().unwrap();
+        *notify_mode = args.notify;
+    }
+    
     if env::var("GITLAB_TOKEN").is_err() {
         eprintln!("Error: The GITLAB_TOKEN environment variable must be set.");
         std::process::exit(1);
@@ -334,15 +365,46 @@ async fn poll_ci_status(
         }
     };
 
-    if current_pane_content.trim() == initial_pane_content.trim() {
+    let notify_mode = {
+        let mode = NOTIFY_MODE.lock().unwrap();
+        *mode
+    };
+    
+    let pane_content_unchanged = current_pane_content.trim() == initial_pane_content.trim();
+    
+    // Always send tmux notification when pane content hasn't changed
+    if pane_content_unchanged {
         info!("{}: Pane content for {} is unchanged. Sending in-pane notification.", task_name, tmux_pane_id);
         if let Err(e) = send_tmux_notification(&tmux_pane_id, &final_status, &merge_request_iid).await {
             error!("{}: Failed to send tmux notification: {}", task_name, e);
         }
-    } else {
-        warn!("{}: Pane content for {} has changed. Sending desktop notification.", task_name, tmux_pane_id);
-        if let Err(e) = send_desktop_notification(&tmux_pane_id, &final_status, &merge_request_iid).await {
-            error!("{}: Failed to send desktop notification: {}", task_name, e);
+    }
+    
+    // Desktop notifications based on --notify parameter
+    match notify_mode {
+        NotifyMode::Never => {
+            info!("{}: Desktop notifications disabled.", task_name);
+        }
+        NotifyMode::PaneContentsChanged => {
+            if !pane_content_unchanged {
+                warn!("{}: Pane content for {} has changed. Sending desktop notification.", task_name, tmux_pane_id);
+                if let Err(e) = send_desktop_notification(&tmux_pane_id, &final_status, &merge_request_iid, false).await {
+                    error!("{}: Failed to send desktop notification: {}", task_name, e);
+                }
+            }
+        }
+        NotifyMode::Always => {
+            if pane_content_unchanged {
+                info!("{}: Pane content unchanged. Sending desktop notification with agent prompt.", task_name);
+                if let Err(e) = send_desktop_notification(&tmux_pane_id, &final_status, &merge_request_iid, true).await {
+                    error!("{}: Failed to send desktop notification: {}", task_name, e);
+                }
+            } else {
+                warn!("{}: Pane content for {} has changed. Sending desktop notification.", task_name, tmux_pane_id);
+                if let Err(e) = send_desktop_notification(&tmux_pane_id, &final_status, &merge_request_iid, false).await {
+                    error!("{}: Failed to send desktop notification: {}", task_name, e);
+                }
+            }
         }
     }
 
@@ -429,15 +491,18 @@ async fn send_tmux_notification(tmux_pane_id: &str, ci_status: &str, merge_reque
 }
 
 #[cfg(not(target_os = "macos"))]
-async fn send_desktop_notification(_tmux_pane_id: &str, ci_status: &str, _merge_request_id: &str) -> Result<()> {
+async fn send_desktop_notification(_tmux_pane_id: &str, ci_status: &str, _merge_request_id: &str, _agent_prompted: bool) -> Result<()> {
     warn!("Desktop notifications are not supported on this OS. CI Status: {}", ci_status);
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
-async fn send_desktop_notification(tmux_pane_id: &str, ci_status: &str, merge_request_id: &str) -> Result<()> {
-    let title = format!("CI finished: {}", ci_status);
-    let message = format!("Pane changed. (MR !{})", merge_request_id);
+async fn send_desktop_notification(tmux_pane_id: &str, ci_status: &str, merge_request_id: &str, agent_prompted: bool) -> Result<()> {
+    let (title, message) = if agent_prompted {
+        (format!("MR !{} {}", merge_request_id, ci_status.to_uppercase()), "Agent prompted".to_string())
+    } else {
+        (format!("MR !{} {}", merge_request_id, ci_status.to_uppercase()), "Pane changed".to_string())
+    };
     let action = "Focus";
 
     let output = Command::new("alerter")

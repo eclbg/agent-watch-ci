@@ -16,3 +16,4 @@ anyhow = "1.0" # For flexible error handling
 uuid = { version = "1.8", features = ["v4", "serde"] } # For generating unique task IDs
 dashmap = "5.5" # A concurrent HashMap, for thread-safe access to tasks
 scopeguard = "1.2.0" # For running cleanup code when a scope is exited
+clap = { version = "4.0", features = ["derive"] } # Command line argument parsing
