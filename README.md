@@ -16,13 +16,13 @@ probably just replace Kitty with your terminal app for this to work.
 
 You'll need ci_watch.py in your path. I create a symlink from `~/.local/bin/ci-watch`.
 
-Build the daemon with `cargo build --release`
+Build the server with `cargo build --release`
 
 You'll also need to have [alerter](https://github.com/vjeantet/alerter) in your path.
 
 # Usage
 
-Run the daemon with `./target/release/ci_monitor_daemon`. It expects `GITLAB_TOKEN` to be set.  
+Run the server with `./target/release/ci_monitor`. It expects `GITLAB_TOKEN` to be set.
 
 Add these to your agent context:
 
