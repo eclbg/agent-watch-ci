@@ -1,5 +1,5 @@
 [package]
-name = "ci_monitor_daemon"
+name = "ci_monitor"
 version = "0.1.0"
 edition = "2024"
 
