@@ -101,9 +101,8 @@ def main():
     else:
         # Prepare a registration request.
         if not args.tmux_pane:
-            # As per spec, tmux_pane is required for registration.
-            # We exit with an error code without printing anything.
-            sys.exit(2) # Using a distinct exit code for invalid arguments.
+            print("Error: --tmux-pane is required when registering a new task.", file=sys.stderr)
+            sys.exit(2)
         payload["command"] = "REGISTER_CI"
         payload["tmux_pane_id"] = args.tmux_pane
 
@@ -119,4 +118,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
