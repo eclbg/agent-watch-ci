@@ -25,9 +25,9 @@ const POLLING_TIMEOUT_SECS: u64 = 3600;
 
 #[derive(Parser, Debug)]
 #[command(name = "ci_monitor_daemon")]
-#[command(about = "A daemon for monitoring GitLab CI/CD pipelines")]
+#[command(about = "A daemon for monitoring GitLab CI/CD pipelines that can prompt coding agents automatically with pipeline results")]
 struct Args {
-    /// Notification behavior
+    /// Notification behavior (macOS only, requires `brew install alerter`)
     #[arg(long, value_enum, default_value_t = NotifyMode::Always)]
     notify: NotifyMode,
 }
@@ -36,7 +36,7 @@ struct Args {
 enum NotifyMode {
     /// Never send notifications
     Never,
-    /// Only notify when pane contents have changed
+    /// Only notify when pane contents have changed. AGENT won't be prompted automatically
     PaneContentsChanged,
     /// Always send notifications
     Always,
@@ -109,7 +109,28 @@ async fn main() -> Result<()> {
         let mut notify_mode = NOTIFY_MODE.lock().unwrap();
         *notify_mode = args.notify;
     }
-    
+
+    // Check for alerter if desktop notifications are enabled (macOS only)
+    #[cfg(target_os = "macos")]
+    if args.notify != NotifyMode::Never {
+        if !is_alerter_installed() {
+            eprintln!("Error: Desktop notifications require 'alerter' but it was not found.");
+            eprintln!("Either:");
+            eprintln!("  - Install it with: brew install alerter");
+            eprintln!("  - Or disable notifications with: --notify never");
+            eprintln!();
+            eprintln!("Note: alerter is only available on macOS.");
+            std::process::exit(1);
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    if args.notify != NotifyMode::Never {
+        eprintln!("Error: Desktop notifications (--notify) are only available on macOS.");
+        eprintln!("Use --notify never to disable notifications.");
+        std::process::exit(1);
+    }
+
     if env::var("GITLAB_TOKEN").is_err() {
         eprintln!("Error: The GITLAB_TOKEN environment variable must be set.");
         std::process::exit(1);
@@ -537,6 +558,15 @@ async fn send_desktop_notification(tmux_pane_id: &str, ci_status: &str, merge_re
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn is_alerter_installed() -> bool {
+    std::process::Command::new("which")
+        .arg("alerter")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 #[cfg(target_os = "macos")]
