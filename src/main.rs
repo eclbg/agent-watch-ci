@@ -18,7 +18,7 @@ use tokio::time::timeout;
 // --- Constants ---
 const SOCKET_PATH: &str = "/tmp/ci_monitor.sock";
 const PID_FILE_PATH: &str = "/tmp/ci_monitor.pid";
-const POLLING_INTERVAL_SECS: u64 = 60;
+const POLLING_INTERVAL_SECS: u64 = 30;
 const POLLING_TIMEOUT_SECS: u64 = 3600;
 
 // --- CLI Arguments ---
