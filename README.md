@@ -1,24 +1,40 @@
 # What's this?
 
 A vibe-coded contraption so CLI-based coding agents get notified when the CI pipeline of the MR
-they're working on finishes. This has been tested with Claude Code, but it hope it works with
-[AmpCode](https://ampcode.com) too
+they're working on finishes. Works with any CLI coding agent.
 
 The tool checks whether the agent session has changed since the ci-watch command was issued. It
-literally reads the contents of the terminal. If the session has not changed, the agent is prompted
-automatically.  
+literally reads the contents of the terminal with tmux capture-pane. If the session has not changed,
+the agent is prompted automatically.  
 
 If the session has changed, the user gets a notification with a button to focus the agent terminal.
-This is all hard-coded to work on MacOs with the Kitty terminal (my setup). Although you can
-probably just replace Kitty with your terminal app for this to work.
+This only works on MacOs and you can specify your terminal with `--terminal "Ghostty"`. Defaults to
+Kitty which is what I use. 
 
 # Installation
 
-You'll need ci_watch.py in your path. I create a symlink from `~/.local/bin/ci-watch`.
+You'll need ci_watch.py in your path. I create a symlink from `~/.local/bin/ci-watch`. With this
+command:
 
-Build the server with `cargo build --release`
+```
+ln -s $PWD/ci_watch.py ~/.local/bin/ci-watch
+```
 
-You'll also need to have [alerter](https://github.com/vjeantet/alerter) in your path.
+If you don't have rust and therefore cargo, you can install it with:
+
+```
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Build the daemon with `cargo build --release`. Then run it with `./target/release/ci_monitor`. You
+need GITLAB_TOKEN set. I use 1password for that, and save logs to a file, so my full command is:
+
+```
+op run -- ./target/release/ci_monitor 2> /tmp/ci_monitor.log
+```
+
+You'll also need to have [alerter](https://github.com/vjeantet/alerter) in your path. Follow the
+README in that repo for instructions (it's fast).
 
 # Usage
 
