@@ -8,8 +8,8 @@ literally reads the contents of the terminal with tmux capture-pane. If the sess
 the agent is prompted automatically.  
 
 If the session has changed, the user gets a notification with a button to focus the agent terminal.
-This only works on MacOs and you can specify your terminal with `--terminal "Ghostty"`. Defaults to
-Kitty which is what I use. 
+This only works on MacOs and you can specify your terminal with `--terminal "Kitty"`. Defaults to
+Ghostty which is what I use. 
 
 # Installation
 

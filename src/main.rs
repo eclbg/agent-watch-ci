@@ -32,7 +32,7 @@ struct Args {
     notify: NotifyMode,
 
     /// Terminal application to focus when notification is clicked (macOS only)
-    #[arg(long, default_value = "Kitty")]
+    #[arg(long, default_value = "Ghostty")]
     terminal: String,
 }
 
@@ -65,7 +65,7 @@ struct ActiveTask {
 // This provides the same ease-of-use as the old `lazy_static!` macro.
 static ACTIVE_TASKS: LazyLock<DashMap<PipelineKey, Arc<ActiveTask>>> = LazyLock::new(DashMap::new);
 static NOTIFY_MODE: LazyLock<std::sync::Mutex<NotifyMode>> = LazyLock::new(|| std::sync::Mutex::new(NotifyMode::Always));
-static TERMINAL_APP: LazyLock<std::sync::Mutex<String>> = LazyLock::new(|| std::sync::Mutex::new("Kitty".to_string()));
+static TERMINAL_APP: LazyLock<std::sync::Mutex<String>> = LazyLock::new(|| std::sync::Mutex::new("Ghostty".to_string()));
 static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
 static GITLAB_API_URL: LazyLock<String> = LazyLock::new(|| {
     env::var("GITLAB_API_URL").unwrap_or_else(|_| "https://gitlab.com/api/v4".to_string())
