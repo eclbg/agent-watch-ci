@@ -30,6 +30,10 @@ struct Args {
     /// Notification behavior (macOS only, requires `brew install alerter`)
     #[arg(long, value_enum, default_value_t = NotifyMode::Always)]
     notify: NotifyMode,
+
+    /// Terminal application to focus when notification is clicked (macOS only)
+    #[arg(long, default_value = "Kitty")]
+    terminal: String,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -61,6 +65,7 @@ struct ActiveTask {
 // This provides the same ease-of-use as the old `lazy_static!` macro.
 static ACTIVE_TASKS: LazyLock<DashMap<PipelineKey, Arc<ActiveTask>>> = LazyLock::new(DashMap::new);
 static NOTIFY_MODE: LazyLock<std::sync::Mutex<NotifyMode>> = LazyLock::new(|| std::sync::Mutex::new(NotifyMode::Always));
+static TERMINAL_APP: LazyLock<std::sync::Mutex<String>> = LazyLock::new(|| std::sync::Mutex::new("Kitty".to_string()));
 static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
 static GITLAB_API_URL: LazyLock<String> = LazyLock::new(|| {
     env::var("GITLAB_API_URL").unwrap_or_else(|_| "https://gitlab.com/api/v4".to_string())
@@ -104,10 +109,14 @@ struct Response {
 async fn main() -> Result<()> {
     let args = Args::parse();
     
-    // Set the global notification mode
+    // Set the global notification mode and terminal app
     {
         let mut notify_mode = NOTIFY_MODE.lock().unwrap();
         *notify_mode = args.notify;
+    }
+    {
+        let mut terminal_app = TERMINAL_APP.lock().unwrap();
+        *terminal_app = args.terminal.clone();
     }
 
     // Check for alerter if desktop notifications are enabled (macOS only)
@@ -571,12 +580,13 @@ fn is_alerter_installed() -> bool {
 
 #[cfg(target_os = "macos")]
 async fn focus_tmux_pane(pane_id: &str) -> Result<()> {
-    let activate_script = r#"tell application "Kitty" to activate"#;
+    let terminal_app = TERMINAL_APP.lock().unwrap().clone();
+    let activate_script = format!(r#"tell application "{}" to activate"#, terminal_app);
     let status = Command::new("osascript")
-        .args(["-e", activate_script])
+        .args(["-e", &activate_script])
         .status()
         .await
-        .context("Failed to execute AppleScript to activate Kitty")?;
+        .context("Failed to execute AppleScript to activate terminal")?;
         
     if !status.success() {
         return Err(anyhow!("AppleScript to activate terminal failed."));
